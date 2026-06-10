@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 mod bash;
+mod cmd;
 mod elvish;
 mod fish;
 mod nushell;
@@ -22,6 +23,7 @@ pub enum ShellType {
     Xonsh,
     Zsh,
     Pwsh,
+    Cmd,
 }
 
 impl ShellType {
@@ -33,6 +35,7 @@ impl ShellType {
             Self::Nu => Box::<nushell::Nushell>::default(),
             Self::Xonsh => Box::<xonsh::Xonsh>::default(),
             Self::Zsh => Box::<zsh::Zsh>::default(),
+            Self::Cmd => Box::<cmd::Cmd>::default(),
             Self::Pwsh => Box::<pwsh::Pwsh>::default(),
         }
     }
@@ -48,6 +51,7 @@ impl Display for ShellType {
             Self::Xonsh => write!(f, "xonsh"),
             Self::Zsh => write!(f, "zsh"),
             Self::Pwsh => write!(f, "pwsh"),
+            Self::Cmd => write!(f, "cmd"),
         }
     }
 }
@@ -66,6 +70,7 @@ impl FromStr for ShellType {
             "xonsh" => Ok(Self::Xonsh),
             "zsh" => Ok(Self::Zsh),
             "pwsh" => Ok(Self::Pwsh),
+            "cmd" => Ok(Self::Cmd),
             _ => Err(format!("unsupported shell type: {s}")),
         }
     }

@@ -1,0 +1,31 @@
+# https://taskfile.dev
+
+version: '3'
+
+tasks:
+  default:
+    cmds:
+      - task build
+
+  build:
+    desc: Build the project
+    deps: [git:submodules]
+    cmds:
+      - cmd: cargo +nightly fmt
+      - cmd: cargo build --locked --features clap_mangen
+
+  git:submodules:
+    sources:
+      - .gitmodules
+    generates:
+      - aqua-registry/README.md
+    cmds:
+      - cmd: git submodule update --init --recursive
+
+  run:
+    cmds:
+      - cmd: cargo run --locked --features clap_mangen -- activate cmd
+
+  install:
+    cmds:
+      - cmd: cargo install --locked --features clap_mangen --path .

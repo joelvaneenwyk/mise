@@ -34,6 +34,7 @@ megalinter-reports/
 .vscode/
 testResults.xml
 .mise/
+.task/
 comment.md
 
 .claude/settings.local.json
