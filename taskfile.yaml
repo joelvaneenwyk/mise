@@ -12,7 +12,7 @@ tasks:
     deps: [git:submodules]
     cmds:
       - cmd: cargo +nightly fmt
-      - cmd: cargo build --locked --features clap_mangen
+      - cmd: cargo build --locked
 
   git:submodules:
     sources:
