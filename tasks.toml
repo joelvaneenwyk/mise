@@ -146,9 +146,11 @@ run = "e2e/run_all_tests"
 
 ["test:cmd"]
 description = "validate cmd.exe (Clink) shell integration via the Lua harness"
-depends = ["build"]
 dir = "{{config_root}}"
-run = "pwsh -NoProfile -File {{config_root}}/e2e-win/cmd/validate.ps1 -MiseExe {{config_root}}/target/debug/mise.exe"
+run = [
+  "pwsh -NoProfile -Command 'cargo build'",
+  "pwsh -NoProfile -File {{config_root}}/e2e-win/cmd/validate.ps1 -MiseExe {{config_root}}/target/debug/mise.exe",
+]
 
 ["test:shuffle"]
 description = 'Run tests with shuffling enabled'

@@ -2647,14 +2647,14 @@ env = "MISE_VERBOSE"
 type = "Bool"
 
 [windows_default_file_shell_args]
-default = "cmd /c"
-description = "Default shell arguments for Windows to be used for file commands. For example, `cmd /c` for cmd.exe."
+default = "cmd /d /c"
+description = "Default shell arguments for Windows to be used for file commands. `/d` disables AutoRun (registry commands that execute on every cmd.exe start), ensuring a clean environment. For example, `cmd /d /c` for cmd.exe without AutoRun, or `cmd /c` to allow AutoRun."
 env = "MISE_WINDOWS_DEFAULT_FILE_SHELL_ARGS"
 type = "String"
 
 [windows_default_inline_shell_args]
-default = "cmd /c"
-description = "Default shell arguments for Windows to be used for inline commands. For example, `cmd /c` for cmd.exe."
+default = "cmd /d /c"
+description = "Default shell arguments for Windows to be used for inline commands. `/d` disables AutoRun (registry commands that execute on every cmd.exe start), ensuring a clean environment. For example, `cmd /d /c` for cmd.exe without AutoRun, or `cmd /c` to allow AutoRun."
 env = "MISE_WINDOWS_DEFAULT_INLINE_SHELL_ARGS"
 type = "String"
 
