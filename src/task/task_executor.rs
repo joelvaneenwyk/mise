@@ -274,6 +274,21 @@ impl TaskExecutor {
             (env, task_env, None)
         };
 
+        // Prepend the executable directory to PATH so that tasks can invoke `mise`
+        // (and any other tools in the same directory) without needing to know their full path.
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let exe_dir_str = exe_dir.to_string_lossy().to_string();
+                let path_key = crate::env::PATH_KEY.to_string();
+                let new_path = if let Some(current_path) = env.get(&path_key) {
+                    format!("{}{}{}", exe_dir_str, std::path::MAIN_SEPARATOR, current_path)
+                } else {
+                    exe_dir_str
+                };
+                env.insert(path_key, new_path);
+            }
+        }
+
         trace!(
             "task {} render_env took {}ms",
             task.name,
