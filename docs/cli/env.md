@@ -39,6 +39,7 @@ Shell type to generate environment variables for
 - `xonsh`
 - `zsh`
 - `pwsh`
+- `cmd`
 
 ### `--json-extended`
 

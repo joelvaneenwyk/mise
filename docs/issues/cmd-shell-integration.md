@@ -1,6 +1,6 @@
 # Cmd.exe Shell Integration — Remaining Work
 
-**Status**: WIP — Activation script implemented, integration gaps remain
+**Status**: Active — activation implemented; validation harness + most integration gaps now closed
 **Branch**: `main` (joelvaneenwyk/mise fork)
 **Upstream**: `jdx/mise`
 
@@ -17,126 +17,166 @@ The cmd.exe shell integration uses [Clink](https://chrisant996.github.io/clink/)
 
 | File | Purpose |
 |------|---------|
-| `src/shell/cmd.rs` | Shell trait impl — activate/deactivate/set_env/prepend_env/unset_env |
+| `src/shell/cmd.rs` | Shell trait impl — activate/deactivate/set_env/prepend_env/unset_env (+ snapshot tests) |
 | `src/shell/mod.rs` | `Cmd` variant in `ShellType` enum, `FromStr`, `Display` |
-| `src/shell/snapshots/mise__shell__cmd__tests__prepend_env.snap` | Snapshot test |
-| `taskfile.yaml` | Build workflow (unrelated to cmd shell, but part of fork) |
+| `src/shell/snapshots/mise__shell__cmd__tests__*.snap` | Snapshot tests (prepend_env, activate, deactivate) |
+| `src/task/task_script_parser.rs` | `cmd_quote` escaping for cmd task args (+ unit test) |
+| `src/cli/completion.rs` | `Cmd` completion variant → prerendered Clink argmatcher |
+| `completions/mise.lua` | Clink argmatcher completion script |
+| `mise.usage.kdl` + `docs/cli/{activate,env}.md` + `docs/getting-started.md` | `cmd` shell choice / docs |
+| `e2e-win/cmd/` | **Validation harness** (see below) |
+| `e2e-win/cmd_activate.Tests.ps1` | Pester e2e test running the harness |
+| `tasks.toml` | `test:cmd` task |
+
+## Programmatic Validation Harness (DONE — use this to iterate)
+
+The critical enabler: a way to validate the integration **without a live cmd.exe + Clink session**. Clink's Lua is stock **Lua 5.4** plus injected globals (`os.setenv`, `clink.*`), so a normal `lua` 5.4 binary can parse and — with those globals mocked — run the emitted scripts.
+
+```
+e2e-win/cmd/
+  mock_clink.lua   Emulates the Clink/cmd Lua environment and records every
+                   interaction (env mutations, popen/execute, onbeginedit
+                   callbacks, doskey, temp files, argmatcher registrations).
+  run_tests.lua    Pure validator: reads pre-captured fixtures and runs each
+                   emitted script inside the mock. Never spawns a process.
+  validate.ps1     Driver: captures `activate` / `hook-env` / `deactivate` /
+                   `completion` output to fixtures (via PowerShell `&`, which
+                   bypasses cmd.exe AutoRun), then runs run_tests.lua.
+  CLAUDE.md        Guidance for agents working on this integration.
+```
+
+Run it any of these ways:
+
+```bash
+mise run test:cmd                                              # build + validate
+pwsh -NoProfile -File e2e-win/cmd/validate.ps1                 # capture + validate
+lua e2e-win/cmd/run_tests.lua <fixtures-dir>                   # validate only
+pwsh -File e2e-win/run.ps1 -TestName "cmd_activate*"           # via Pester
+```
+
+Currently **27 behavioral checks** pass, covering syntax validity, activation
+(MISE_SHELL, onbeginedit hook + directory-change re-run, doskey macro, bridge
+file, hook-env eval), hook-env output, env primitives, deactivate teardown, and
+the completion argmatcher.
+
+> **Why capture is split from validation:** the Lua validator never calls mise.
+> `io.popen` shells out through `cmd.exe`, and a dev machine may have a cmd.exe
+> AutoRun customization (clink injection, dotfile bootstrap) that pollutes or
+> empties captured output. `validate.ps1` captures via PowerShell's `&`
+> (CreateProcess, no cmd layer). Keep all capture in PowerShell, never `cmd /c`.
 
 ## Remaining Work
 
-### 1. Task Script Escaping (HIGH — potential command injection)
+### 1. Task Script Escaping — ✅ DONE
 
 **File**: `src/task/task_script_parser.rs`
 
-The task script parser has shell-aware command escaping but only handles `Bash | Zsh | Fish`. The `Cmd` variant falls through to an unescaped `_ => v.to_string()` branch. This means task arguments containing special characters (`&`, `|`, `>`, `<`, `^`, `%`) won't be escaped when the task shell is cmd.
+Added `cmd_quote()` and a `Some(ShellType::Cmd)` branch in the arg-escape
+closure (parallel to `shell_words::quote` for bash/zsh/fish), plus a unit test
+(`test_cmd_quote`).
 
-**Fix**: Add a cmd-specific escaping branch that wraps values or uses `^` escape sequences for cmd metacharacters.
+**Correction to the original plan:** the previously-suggested `%` → `%%`
+escaping is **wrong** here. Windows tasks run as `cmd /c <script>` with the
+script as a single argv element — i.e. the cmd *command line*, not a batch file.
+`%%` only collapses to `%` inside batch files; on the command line it would
+leave a literal `%%`. Instead `cmd_quote` wraps values containing whitespace or
+cmd metacharacters in double quotes (inside which cmd treats `& | < > ( ) ^`
+literally), doubling embedded quotes. This neutralizes the command-injection
+vectors.
 
-```rust
-// Approximate fix in task_script_parser.rs
-Some(ShellType::Cmd) => {
-    // Escape cmd.exe metacharacters with ^
-    v.to_string()
-        .replace('^', "^^")
-        .replace('&', "^&")
-        .replace('|', "^|")
-        .replace('<', "^<")
-        .replace('>', "^>")
-        .replace('%', "%%")
-}
-```
+**Known limitation (new task #8 below):** `%VAR%` and `!VAR!` (delayed
+expansion) are still expanded by cmd even inside double quotes, and there is no
+reliable command-line escape for them. Quoting prevents command execution; it
+cannot fully prevent variable expansion.
 
-### 2. Documentation Updates (HIGH — discoverability)
+### 2. Documentation Updates — ✅ DONE
 
-The following docs list shell choices but omit `cmd`:
+`cmd` added to the `--shell` choices in `mise.usage.kdl` (source of truth) and
+the generated `docs/cli/activate.md` / `docs/cli/env.md`, plus a Clink
+activation example in `docs/getting-started.md`.
 
-| File | Section |
-|------|---------|
-| `docs/cli/activate.md` | `--shell` choices |
-| `docs/cli/env.md` | `--shell` choices |
-| `docs/getting-started.md` | Activation examples |
+> Note: a full `mise run render:usage` regenerates *every* `docs/cli/*.md` and
+> currently produces large unrelated formatting drift (the committed docs were
+> generated by an older `usage` version). The edits here were therefore applied
+> surgically to match what regeneration would add for `cmd`. A future cleanup
+> could re-baseline all CLI docs with the current `usage` tool in one commit.
 
-These are auto-generated from `mise.usage.kdl` / `settings.toml`, so the fix may be to update the source of truth (the `ShellType` clap enum already includes `Cmd`, so re-running `mise run render:usage` may pick it up).
+### 3. Shell Completions — ✅ DONE
 
-### 3. Shell Completions (MEDIUM — quality of life)
+**Files**: `src/cli/completion.rs`, `completions/mise.lua`
 
-**File**: `src/cli/completion.rs`
+Added a `Cmd` variant to the completion `Shell` enum that emits a prerendered
+Clink argmatcher (`completions/mise.lua`). The argmatcher completes top-level
+subcommands and global flags, and does dynamic task-name completion for
+`mise run` / `mise r` via `mise tasks ls`. `mise completion cmd` short-circuits
+the `usage`-based path (usage has no Clink target). The script guards on `clink`
+so it loads harmlessly outside Clink. Validated by the harness.
 
-Only bash/fish/zsh/pwsh have prerendered completion scripts. Cmd.exe doesn't have a native completion mechanism, but Clink supports Lua-based completers. A completion script could be generated that uses `clink.argmatcher` to provide tab-completion.
+**Follow-up (new task #9 below):** completion currently only resolves task names
+for `run`. Tool-name completion for `use`/`install`/`uninstall` and setting
+names for `settings` would be nice-to-have.
 
-**Suggested approach**: Create `completions/mise.lua` (Clink argmatcher) and wire it into the completion command.
+### 4. `hook-env` Output Format — ✅ VERIFIED
 
-### 4. `hook-env` Output Format (VERIFY)
+The harness captures `mise hook-env -s cmd`, confirms it is valid Lua, runs it
+in the mock, and asserts it performs `os.setenv` mutations and does **not** shell
+out. The activation test also feeds a representative hook-env response and
+asserts the activate script `load()`s and applies it.
 
-The `hook-env -s cmd` flag needs to output Lua code that Clink can evaluate. Verify that:
-- `set_env` / `prepend_env` / `unset_env` output from hook-env matches what `cmd.rs` generates
-- The hook-env output doesn't include shell syntax from another format
+### 5. Unit Test Coverage — ✅ DONE
 
-This should already work if the shell dispatch in `hook_env.rs` uses `ShellType::Cmd.as_shell()` — but it should be tested end-to-end.
+`src/shell/cmd.rs` now has a `#[cfg(test)]` module with snapshots for `set_env`
+(inline), `unset_env` (inline), a special-char `set_env` escaping case (inline),
+`prepend_env` (file), `activate` (file, fixed exe path for determinism), and
+`deactivate` (file). The Lua harness complements these with behavioral checks.
 
-### 5. Unit Test Coverage (LOW — code quality)
+### 6. E2E Tests — ✅ DONE
 
-**Current**: Only `prepend_env` has a snapshot test.
+`e2e-win/cmd_activate.Tests.ps1` runs the validator under Pester. It **skips**
+(does not fail) when no Lua 5.4 interpreter is present, so CI without Lua stays
+green. Locally install Lua with `scoop install lua` or `mise use lua@5.4`.
 
-**Missing snapshots**:
-- `set_env`
-- `unset_env`
-- `activate` (at least verify it produces valid Lua)
-- `deactivate`
+### 7. Shell Aliases — UNCHANGED (acceptable)
 
-**Suggested**: Add a `#[cfg(test)]` module in `cmd.rs`:
+`set_alias` / `unset_alias` still use the default no-op. `doskey` macros could
+serve this purpose in future but this is not required.
 
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::shell::ActivateOptions;
-    use insta::assert_snapshot;
-    use std::path::PathBuf;
+## New Tasks / Findings (discovered during this work)
 
-    fn replace_path(s: &str) -> String {
-        s.replace(env!("CARGO_HOME"), "/CARGO_HOME")
-    }
+### 8. `%`/`!` expansion in cmd task args (LOW — documented limitation)
 
-    #[test]
-    fn test_set_env() {
-        let cmd = Cmd::default();
-        assert_snapshot!(cmd.set_env("FOO", "bar"));
-    }
+As noted under item #1, double-quoting cannot suppress `%VAR%`/`!VAR!`
+expansion on the cmd command line. If a use case needs literal `%`/`!` in a task
+argument, the value should be passed via the environment rather than
+interpolated into the command line. No code fix planned unless a concrete need
+arises; documented in `cmd_quote`'s doc comment.
 
-    #[test]
-    fn test_unset_env() {
-        let cmd = Cmd::default();
-        assert_snapshot!(cmd.unset_env("FOO"));
-    }
+### 9. Richer completion (LOW — quality of life)
 
-    #[test]
-    fn test_prepend_env() {
-        let cmd = Cmd::default();
-        assert_snapshot!(replace_path(&cmd.prepend_env("PATH", "/some/dir:/2/dir")));
-    }
-}
-```
+`completions/mise.lua` only completes task names for `mise run`. Could extend to
+tool names (`use`/`install`) and setting keys (`settings`). These are more
+expensive to enumerate and may warrant caching.
 
-### 6. E2E Tests (LOW — regression prevention)
+### 10. Dead fallback branch in `deactivate()` (LOW — cleanup)
 
-No e2e tests exist for `mise activate cmd`. The `e2e-win/` directory has PowerShell-based tests but nothing for cmd.exe.
+`src/shell/cmd.rs::deactivate` has an `else` branch referencing
+`_G._mise_internal_handler.script_file_path_for_cleanup`, which is never set
+(the handler is a plain function). It is harmless but dead. Consider removing it
+to simplify the generated script.
 
-**Suggested**: Add `e2e-win/cmd-activate.Tests.ps1` that:
-1. Starts a cmd.exe subprocess with Clink
-2. Sources the `mise activate cmd` output
-3. Verifies `MISE_SHELL` is set to `cmd`
-4. Verifies tool shims are on PATH after activation
+### 11. `__MISE_ORIG_PATH` handling (VERIFY — possible parity gap)
 
-### 7. Shell Aliases (LOW — known limitation)
-
-The `set_alias` / `unset_alias` trait methods use the default no-op implementation. Cmd.exe doesn't have native aliases, but `doskey` macros could serve this purpose. This is acceptable as-is for now.
+`activate` leaves a commented-out `__MISE_ORIG_PATH` line. Other shells rely on
+mise's standard PATH handling via hook-env; confirm cmd doesn't need this and
+remove the comment, or wire it up if a PATH-restore edge case is found.
 
 ## Prerequisites for Testing
 
-- **Clink** must be installed and configured with cmd.exe
-- The activation script is designed for Clink's embedded Lua 5.4
-- Standard cmd.exe without Clink cannot run the activation script
+- **Lua 5.4** on PATH (`scoop install lua` or `mise use lua@5.4`) — must be 5.4
+  to match Clink (5.1 would reject `load(s, name, "t")` and other 5.4 syntax).
+- A built mise (`mise run build`).
+- **Clink** is only needed for a real interactive smoke test (see below); the
+  harness does not require it.
 
 ## Architecture Notes
 
@@ -151,8 +191,8 @@ The `set_alias` / `unset_alias` trait methods use the default no-op implementati
 │  - Sets MISE_SHELL=cmd                    │
 │  - Creates temp .lua for doskey bridge    │
 │  - doskey mise=lua "<temp>.lua" $*        │
-│  - clink.onbeginedit → _mise_hook()      │
-│  - _mise_hook() → io.popen(hook-env)     │
+│  - clink.onbeginedit → _mise_hook()       │
+│  - _mise_hook() → io.popen(hook-env)      │
 │     → safe_load_and_run(result)           │
 └──────────────────────────────────────────┘
          │
@@ -177,6 +217,9 @@ cargo build --features clap_mangen
 
 :: Generate activation script and load it
 target\debug\mise.exe activate cmd > %LOCALAPPDATA%\clink\mise.lua
+
+:: Optionally, completions
+target\debug\mise.exe completion cmd > %LOCALAPPDATA%\clink\mise-completion.lua
 
 :: Restart cmd.exe (clink auto-loads scripts from its profile dir)
 ```

@@ -185,6 +185,14 @@ Invoke-Item $profile
 
 - If not using PowerShell, add `<homedir>\AppData\Local\mise\shims` to `PATH`.
 
+For `cmd.exe`, mise can integrate via [Clink](https://chrisant996.github.io/clink/) (a readline/Lua add-on for cmd). Write the activation script into Clink's autostart directory:
+
+```cmd
+mise activate cmd > "%LOCALAPPDATA%\clink\mise.lua"
+```
+
+Then restart cmd.exe — Clink auto-loads Lua scripts from its profile directory. Without Clink, use shims instead by adding `<homedir>\AppData\Local\mise\shims` to `PATH`.
+
 == Other package managers
 
 ::: code-group

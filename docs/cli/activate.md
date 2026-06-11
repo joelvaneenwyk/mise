@@ -40,6 +40,7 @@ Shell type to generate the script for
 - `xonsh`
 - `zsh`
 - `pwsh`
+- `cmd`
 
 ## Flags
 
