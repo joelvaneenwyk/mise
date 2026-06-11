@@ -380,3 +380,54 @@ fn escape_lua_string(s: &str) -> String {
         .replace('\t', "\\t") // Escape tabs
     // Add other escapes if needed (e.g., for other control characters)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shell::ActivateOptions;
+    use insta::assert_snapshot;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_set_env() {
+        assert_snapshot!(Cmd::default().set_env("FOO", "bar"), @r#"os.setenv("FOO", "bar")"#);
+    }
+
+    #[test]
+    fn test_unset_env() {
+        assert_snapshot!(Cmd::default().unset_env("FOO"), @r#"os.setenv("FOO", nil)"#);
+    }
+
+    #[test]
+    fn test_prepend_env() {
+        assert_snapshot!(Cmd::default().prepend_env("PATH", "/some/dir:/2/dir"));
+    }
+
+    #[test]
+    fn test_set_env_escapes_special_chars() {
+        // Backslashes and quotes in values must be escaped so the emitted Lua
+        // remains a valid string literal.
+        assert_snapshot!(
+            Cmd::default().set_env("FOO", r#"C:\a "b" c"#),
+            @r#"os.setenv("FOO", "C:\\a \"b\" c")"#
+        );
+    }
+
+    #[test]
+    fn test_activate_is_valid_shape() {
+        // Use a fixed exe path so the snapshot is deterministic across machines.
+        let cmd = Cmd::default();
+        let opts = ActivateOptions {
+            exe: PathBuf::from("/path/to/mise"),
+            flags: String::new(),
+            no_hook_env: false,
+            prelude: vec![],
+        };
+        assert_snapshot!(cmd.activate(opts));
+    }
+
+    #[test]
+    fn test_deactivate_is_valid_shape() {
+        assert_snapshot!(Cmd::default().deactivate());
+    }
+}

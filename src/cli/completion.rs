@@ -39,12 +39,18 @@ impl Completion {
     pub async fn run(self) -> Result<()> {
         let shell = self.shell.or(self.shell_type).unwrap();
 
-        let script = match self.call_usage(shell).await {
-            Ok(script) => script,
-            Err(e) => {
-                debug!("usage command failed, falling back to prerendered completions");
-                debug!("error: {e:?}");
-                self.prerendered(shell)
+        // cmd.exe has no `usage`-generated completion; it uses a prerendered
+        // Clink argmatcher (Lua) instead. Short-circuit before calling usage.
+        let script = if shell == Shell::Cmd {
+            self.prerendered(shell)
+        } else {
+            match self.call_usage(shell).await {
+                Ok(script) => script,
+                Err(e) => {
+                    debug!("usage command failed, falling back to prerendered completions");
+                    debug!("error: {e:?}");
+                    self.prerendered(shell)
+                }
             }
         };
         miseprintln!("{}", script.trim());
@@ -88,6 +94,7 @@ impl Completion {
             Shell::Fish => include_str!("../../completions/mise.fish"),
             Shell::PowerShell => include_str!("../../completions/mise.ps1"),
             Shell::Zsh => include_str!("../../completions/_mise"),
+            Shell::Cmd => include_str!("../../completions/mise.lua"),
         }
         .to_string()
     }
@@ -100,10 +107,11 @@ static AFTER_LONG_HELP: &str = color_print::cstr!(
     $ <bold>mise completion zsh  > /usr/local/share/zsh/site-functions/_mise</bold>
     $ <bold>mise completion fish > ~/.config/fish/completions/mise.fish</bold>
     $ <bold>mise completion powershell >> $PROFILE</bold>
+    $ <bold>mise completion cmd > "%LOCALAPPDATA%\clink\mise-completion.lua"</bold>  (requires Clink)
 "#
 );
 
-#[derive(Debug, Clone, Copy, EnumString, strum::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, strum::Display)]
 #[strum(serialize_all = "snake_case")]
 #[allow(clippy::enum_variant_names)] // PowerShell is a proper noun
 enum Shell {
@@ -112,11 +120,18 @@ enum Shell {
     #[strum(serialize = "powershell")]
     PowerShell,
     Zsh,
+    Cmd,
 }
 
 impl ValueEnum for Shell {
     fn value_variants<'a>() -> &'a [Self] {
-        &[Self::Bash, Self::Fish, Self::PowerShell, Self::Zsh]
+        &[
+            Self::Bash,
+            Self::Fish,
+            Self::PowerShell,
+            Self::Zsh,
+            Self::Cmd,
+        ]
     }
     fn to_possible_value(&self) -> Option<PossibleValue> {
         Some(PossibleValue::new(self.to_string()))

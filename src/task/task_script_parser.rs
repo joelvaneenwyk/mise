@@ -786,6 +786,7 @@ impl TaskScriptParser {
                         Some(ShellType::Zsh | ShellType::Bash | ShellType::Fish) => {
                             shell_words::quote(&v.to_string()).to_string()
                         }
+                        Some(ShellType::Cmd) => cmd_quote(&v.to_string()),
                         _ => v.to_string(),
                     },
                 }
@@ -993,6 +994,52 @@ pub fn subcommand_name_from_parse(cmds: &[usage::SpecCommand]) -> Option<String>
     }
 }
 
+/// Quote a value for safe interpolation into a cmd.exe command line.
+///
+/// On Windows, inline tasks run as `cmd /c <script>`, so a task argument
+/// substituted into the script (e.g. `echo {{ arg(name='x') }}`) lands on the
+/// cmd command line. Without quoting, a value like `a & calc` would let cmd
+/// chain commands — a command-injection vector. This is the cmd analogue of the
+/// `shell_words::quote` call used for bash/zsh/fish.
+///
+/// Strategy: wrap the value in double quotes when it contains whitespace or any
+/// cmd metacharacter, and double embedded quotes. cmd.exe treats the
+/// command-chaining/redirection metacharacters (`& | < > ( ) ^`) literally
+/// inside double quotes, so quoting neutralizes them.
+///
+/// Known limitation: `%VAR%` (and `!VAR!` under delayed expansion) are still
+/// expanded by cmd even inside double quotes, and there is no reliable
+/// command-line escape for them. Quoting prevents command execution; it cannot
+/// fully prevent variable expansion. Callers needing literal `%`/`!` should pass
+/// values through the environment instead of the command line.
+fn cmd_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "\"\"".to_string();
+    }
+    let needs_quoting = s.chars().any(|c| {
+        matches!(
+            c,
+            ' ' | '\t' | '"' | '&' | '|' | '<' | '>' | '(' | ')' | '^' | '%' | '!'
+        )
+    });
+    if !needs_quoting {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        if c == '"' {
+            // Double an embedded quote so it doesn't terminate the quoted span.
+            out.push('"');
+            out.push('"');
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('"');
+    out
+}
+
 fn shell_from_shebang(script: &str) -> Option<Vec<String>> {
     let shebang = script.lines().next()?.strip_prefix("#!")?;
     let shebang = shebang.strip_prefix("/usr/bin/env -S").unwrap_or(shebang);
@@ -1007,6 +1054,34 @@ fn shell_from_shebang(script: &str) -> Option<Vec<String>> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_cmd_quote() {
+        // Plain values are left untouched.
+        assert_eq!(cmd_quote("hello"), "hello");
+        assert_eq!(cmd_quote("file.txt"), "file.txt");
+        assert_eq!(cmd_quote("C:\\path\\to\\file"), "C:\\path\\to\\file");
+
+        // Empty becomes an explicit empty argument.
+        assert_eq!(cmd_quote(""), "\"\"");
+
+        // Whitespace forces quoting.
+        assert_eq!(cmd_quote("a b"), "\"a b\"");
+
+        // Command-injection metacharacters are quoted (neutralized by cmd
+        // inside double quotes).
+        assert_eq!(cmd_quote("a&calc"), "\"a&calc\"");
+        assert_eq!(cmd_quote("a|b"), "\"a|b\"");
+        assert_eq!(cmd_quote("a>b"), "\"a>b\"");
+        assert_eq!(cmd_quote("a<b"), "\"a<b\"");
+        assert_eq!(cmd_quote("a^b"), "\"a^b\"");
+        assert_eq!(cmd_quote("(a)"), "\"(a)\"");
+        assert_eq!(cmd_quote("%PATH%"), "\"%PATH%\"");
+        assert_eq!(cmd_quote("a!b"), "\"a!b\"");
+
+        // Embedded quotes are doubled.
+        assert_eq!(cmd_quote("a\"b"), "\"a\"\"b\"");
+    }
 
     #[tokio::test]
     async fn test_task_parse_arg() {
