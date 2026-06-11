@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lua e2e-win/cmd/run_tests.lua \"$\\(pwd\\)/target/debug/mise.exe\")",
+      "Bash(__MISE_DIFF=\"eAEDAAAAAAE=\" ./target/debug/mise.exe deactivate)",
+      "Bash(MISE_SHELL=cmd __MISE_DIFF=\"eAEDAAAAAAE=\" ./target/debug/mise.exe deactivate)"
+    ]
+  }
+}
